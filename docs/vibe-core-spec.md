@@ -149,6 +149,49 @@ it's the same primitive that gates the two products with real trust/safety surfa
 
 ---
 
+## 4b. Cross-harness support (works with EVERY agentic CLI)
+
+Non-negotiable: the whole suite works across all agentic coding harnesses, not just
+Claude Code. Core owns this via a **host adapter** per harness — one small module
+that knows three things about that harness: (a) how to detect its provider/key
+config (cascade tier 1), (b) its hook/event surface (triggers §3), (c) how to read
+its token usage (for vibedating). Products stay harness-agnostic; they only touch
+the normalized `VibeEvent` / cascade / usage APIs.
+
+Target harnesses (v0 aims wide; adapters land incrementally, watcher-floor covers
+any not-yet-adapted one):
+**Claude Code · Codex · Cursor · Gemini CLI · Grok · pi (dev CLI) · Kimi / Moonshot
+CLI · Hermes · OpenClaw.**
+Also on the radar (same adapter shape): Aider, OpenCode, Cline, Continue, Goose
+(Block), Amp, Warp, Zed agent, Qwen Code, Augment/Auggie, Charm Crush.
+Adding a harness = one adapter file (detect-config + hook-map + usage-read), same
+one-file-per-provider ergonomics as §2.2.
+
+## 4c. Timing axis — sync/live vs async (per hook, user-customizable)
+
+Every product's output can fire on either cadence; core exposes it as a per-trigger
+setting so products don't reinvent it:
+- **sync / live** — generate *as the agent works* (viberadio ambient narration,
+  vibemovie scenes building live, vibelive is inherently live).
+- **async** — generate *after* a turn/task/session completes (task-summary audio, a
+  session recap movie).
+Combined with §3's `off | ask | auto`, each trigger is `(timing, policy)`. Default
+sensible per product; fully overridable.
+
+## 4d. Multi-model mixing (not just one provider at a time)
+
+The cascade resolves a provider *per capability*, but a product may use **several
+providers concurrently** for different slots — e.g. viberadio rendering a two-host
+podcast with each host on a different TTS voice/provider, or one style on a BYO key
+and another on the on-device tier. Core supports per-slot resolution
+(`cascade.resolve({capability, slot, prefer})`) and lets the user pin a specific
+model per slot. Local + hosted can coexist in one output.
+
+## 4e. Product identity
+Each product is its **own brand + domain**, not a shared umbrella host. Share/link
+features use the product's own domain (e.g. vibeshare's own domain, not a generic
+`vibe.live`). Core provides the URL/relay plumbing; the identity is per-product.
+
 ## 5. What core does NOT do
 Per ponytail: core is primitives, not products. No product-specific logic leaks in.
 No abstraction with a single consumer — a thing graduates into core only when a
