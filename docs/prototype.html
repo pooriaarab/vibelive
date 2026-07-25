@@ -1,0 +1,513 @@
+<title>vibelive — multiplayer for agentic terminals</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --bg-0:#07080b;
+    --bg-1:#0d0f14;
+    --panel:#101319;
+    --panel-edge:rgba(255,255,255,.07);
+    --text-0:#e8eaf0;
+    --text-1:#9aa3b8;
+    --text-2:#5c6478;
+    --amber:#f5a524; --amber-ink:#241a04; --amber-rgb:245,165,36;
+    --red:#e5484d; --red-rgb:229,72,77;
+    --blue:#3b82f6; --blue-rgb:59,130,246;
+    --teal:#12b886; --teal-rgb:18,176,134;
+    --green:#3ddc84;
+    font-size:16px;
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0; padding:0; overflow-x:hidden; min-height:100%;
+    background:
+      radial-gradient(120vmax 90vmax at 15% -10%, #12151d 0%, transparent 55%),
+      radial-gradient(100vmax 80vmax at 110% 10%, #14131a 0%, transparent 50%),
+      var(--bg-0);
+    color:var(--text-0);
+    font-family:ui-monospace, "SF Mono", "Menlo", "Cascadia Code", Consolas, monospace;
+  }
+  .stage{
+    min-height:100vh;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    padding:6vh 16px 3vh;
+    gap:14px;
+  }
+
+  /* ---------- terminal chrome ---------- */
+  .terminal{
+    width:min(920px, 94vw);
+    background:var(--panel);
+    border:1px solid var(--panel-edge);
+    border-radius:14px;
+    box-shadow:
+      0 1px 0 rgba(255,255,255,.04) inset,
+      0 30px 70px -25px rgba(0,0,0,.75),
+      0 10px 24px -12px rgba(0,0,0,.6);
+    overflow:hidden;
+    position:relative;
+  }
+  .titlebar{
+    display:flex; align-items:center; gap:12px;
+    padding:10px 14px;
+    background:linear-gradient(180deg, #14171f, #101218);
+    border-bottom:1px solid var(--panel-edge);
+  }
+  .traffic{ display:flex; gap:7px; flex:0 0 auto; }
+  .traffic .dot{ width:11px; height:11px; border-radius:50%; }
+  .traffic .dot.red{ background:#ff5f57; }
+  .traffic .dot.yellow{ background:#febc2e; }
+  .traffic .dot.green{ background:#28c840; }
+  .path{
+    flex:1 1 auto; text-align:center;
+    font-size:12.5px; color:var(--text-2);
+    letter-spacing:.01em;
+    user-select:none;
+  }
+  .tb-right{ display:flex; align-items:center; gap:10px; flex:0 0 auto; }
+
+  .presence{ display:flex; align-items:center; }
+  .avatar{
+    width:24px; height:24px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    font-size:10.5px; font-weight:700;
+    border:2px solid #14171f;
+    margin-left:-8px;
+    position:relative;
+    cursor:default;
+  }
+  .presence .avatar:first-child{ margin-left:0; }
+  .avatar.host::after{
+    content:"★"; position:absolute; right:-3px; bottom:-3px;
+    font-size:8px; color:var(--amber);
+    text-shadow:0 0 2px #000, 0 0 2px #000;
+  }
+
+  .share-btn{
+    display:flex; align-items:center; gap:6px;
+    background:rgba(255,255,255,.04);
+    border:1px solid var(--panel-edge);
+    color:var(--text-1);
+    font-family:inherit; font-size:11.5px;
+    padding:5px 10px; border-radius:7px;
+    cursor:pointer;
+    transition:background .15s ease, color .15s ease, border-color .15s ease;
+    white-space:nowrap;
+  }
+  .share-btn:hover{ background:rgba(255,255,255,.08); color:var(--text-0); border-color:rgba(255,255,255,.14); }
+  .share-btn:active{ transform:translateY(1px); }
+  .share-btn .share-sub{ color:var(--text-2); font-size:10.5px; }
+  .share-btn.copied{ color:var(--green); border-color:rgba(61,220,132,.35); }
+
+  /* ---------- body ---------- */
+  .term-body{
+    position:relative;
+    padding:18px 20px 14px;
+    min-height:420px;
+  }
+  .term-header{ margin-bottom:14px; }
+  .mascot-row{ display:flex; align-items:center; gap:10px; }
+  .mascot{ display:block; flex:0 0 auto; filter:drop-shadow(0 3px 6px rgba(245,165,36,.25)); }
+  .mascot .eyes{ transform-origin:center; animation:blink 4.6s infinite; }
+  .mascot-svg{ animation:bob 3.1s ease-in-out infinite alternate; }
+  @keyframes bob{ from{ transform:translateY(0); } to{ transform:translateY(-3px); } }
+  @keyframes blink{ 0%,94%,100%{ transform:scaleY(1); } 97%{ transform:scaleY(.12); } }
+
+  .welcome{ font-size:15.5px; font-weight:600; color:var(--text-0); }
+  .welcome .name{ color:var(--amber); }
+  .subline{ margin-top:3px; font-size:12.5px; color:var(--text-2); }
+
+  .term-feed{
+    height:280px;
+    overflow-y:hidden;
+    display:flex; flex-direction:column; gap:5px;
+    font-size:13.4px; line-height:1.65;
+    mask-image:linear-gradient(to bottom, transparent 0, black 18px, black calc(100% - 6px), transparent 100%);
+  }
+  .line{
+    white-space:pre-wrap; word-break:break-word;
+    padding:1px 6px; border-radius:5px;
+    transition:background-color .5s ease;
+  }
+  .line .bullet{ color:var(--text-2); margin-right:4px; }
+  .line.tool .tool-name{ color:#c9a6ff; font-weight:600; }
+  .line.tool .tool-arg{ color:var(--text-1); }
+  .line.agent{ color:var(--text-0); }
+  .line.success{ color:var(--green); }
+  .line.spin{ color:var(--text-1); }
+  .line.spin .spinner{ color:var(--amber); margin-right:5px; }
+  .line.sys{ color:var(--text-2); font-style:italic; }
+
+  .line.chat-dorsa{ color:#ffcf80; }
+  .line.chat-nick{ color:#ff9b9e; }
+  .line.chat-shubham{ color:#8ec1ff; }
+  .line.chat-you{ color:#6fe0bd; }
+  .line b{ font-weight:700; }
+
+  .diff{
+    display:flex; flex-direction:column; gap:2px;
+    margin:2px 0 2px 20px; font-size:13px;
+  }
+  .diff .del{ background:rgba(var(--red-rgb),.12); color:#ffb3b3; border-radius:4px; padding:1px 8px; }
+  .diff .add{ background:rgba(18,176,134,.14); color:#8be9c9; border-radius:4px; padding:1px 8px; }
+
+  .cursor-layer{ position:absolute; inset:0; pointer-events:none; overflow:hidden; z-index:5; }
+  .cursor{
+    position:absolute; top:0; left:0;
+    transform:translate3d(40px, 60px, 0);
+    transition:transform 1.2s cubic-bezier(.65,0,.35,1);
+    will-change:transform;
+    display:flex; align-items:flex-start; gap:0;
+  }
+  .cursor svg{ width:17px; height:17px; display:block; filter:drop-shadow(0 2px 3px rgba(0,0,0,.5)); }
+  .cursor-label{
+    margin-left:2px; margin-top:11px;
+    font-size:10.5px; font-weight:700;
+    padding:2px 7px; border-radius:5px 8px 8px 8px;
+    white-space:nowrap;
+    box-shadow:0 3px 8px rgba(0,0,0,.35);
+  }
+  .cursor.dorsa svg{ color:var(--amber); }
+  .cursor.dorsa .cursor-label{ background:var(--amber); color:var(--amber-ink); }
+  .cursor.nick svg{ color:var(--red); }
+  .cursor.nick .cursor-label{ background:var(--red); color:#fff; }
+  .cursor.shubham svg{ color:var(--blue); }
+  .cursor.shubham .cursor-label{ background:var(--blue); color:#fff; }
+
+  .selection-bar{
+    position:absolute; border-radius:3px;
+    opacity:1; transition:opacity .5s ease;
+    pointer-events:none;
+  }
+
+  /* ---------- chat input ---------- */
+  .chat-bar{
+    display:flex; align-items:center; gap:8px;
+    margin:0 20px 12px; padding:8px 12px;
+    background:rgba(255,255,255,.03);
+    border:1px solid var(--panel-edge);
+    border-radius:9px;
+    transition:border-color .15s ease, background .15s ease;
+  }
+  .chat-bar:focus-within{ border-color:rgba(245,165,36,.4); background:rgba(255,255,255,.045); }
+  .chat-prompt{ color:var(--amber); font-weight:700; }
+  .chat-bar input{
+    flex:1 1 auto; background:none; border:none; outline:none;
+    color:var(--text-0); font-family:inherit; font-size:13px;
+  }
+  .chat-bar input::placeholder{ color:var(--text-2); }
+  .chat-hint{ color:var(--text-2); font-size:11px; flex:0 0 auto; }
+
+  /* ---------- status bar ---------- */
+  .statusbar{
+    display:flex; align-items:center; justify-content:space-between;
+    gap:12px; padding:9px 16px;
+    background:#0b0d12;
+    border-top:1px solid var(--panel-edge);
+    font-size:11.5px; color:var(--text-2);
+    flex-wrap:wrap;
+  }
+  .statusbar kbd{
+    font-family:inherit; background:rgba(255,255,255,.06);
+    border-radius:4px; padding:0 5px; color:var(--text-1); font-size:10.5px;
+  }
+  .status-right{ display:flex; align-items:center; gap:14px; }
+  .in-session{ color:var(--text-1); }
+  .local-badge{
+    display:flex; align-items:center; gap:6px;
+    color:var(--text-1);
+    padding:3px 9px; border-radius:99px;
+    background:rgba(61,220,132,.08);
+    border:1px solid rgba(61,220,132,.22);
+  }
+  .pulse-dot{
+    width:6px; height:6px; border-radius:50%; background:var(--green);
+    box-shadow:0 0 0 0 rgba(61,220,132,.55);
+    animation:pulse 2.4s ease-out infinite;
+  }
+  @keyframes pulse{
+    0%{ box-shadow:0 0 0 0 rgba(61,220,132,.5); }
+    70%{ box-shadow:0 0 0 6px rgba(61,220,132,0); }
+    100%{ box-shadow:0 0 0 0 rgba(61,220,132,0); }
+  }
+
+  .caption{
+    font-size:11px; color:var(--text-2); text-align:center;
+    max-width:600px; line-height:1.5;
+  }
+
+  @media (max-width:640px){
+    .term-body{ padding:14px 14px 10px; }
+    .term-feed{ height:320px; font-size:12.6px; }
+    .path{ display:none; }
+    .chat-hint{ display:none; }
+  }
+</style>
+
+<div class="stage">
+  <div class="terminal" id="terminal">
+    <div class="titlebar">
+      <div class="traffic"><span class="dot red"></span><span class="dot yellow"></span><span class="dot green"></span></div>
+      <div class="path">~/Desktop — claude</div>
+      <div class="tb-right">
+        <div class="presence" id="presence"></div>
+        <button class="share-btn" id="shareBtn" title="spectate or invite">
+          🔗 vibe.live/s/9fx2 <span class="share-sub">spectate or invite</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="term-body" id="termBody">
+      <div class="term-header">
+        <div class="mascot-row">
+          <svg class="mascot mascot-svg" viewBox="0 0 40 40" width="30" height="30">
+            <ellipse cx="20" cy="23" rx="15" ry="13" fill="#f5a524"/>
+            <ellipse cx="14" cy="16" rx="5" ry="3.4" fill="#ffffff" opacity=".25"/>
+            <g class="eyes">
+              <ellipse cx="14.5" cy="22" rx="2.1" ry="2.6" fill="#241a04"/>
+              <ellipse cx="25.5" cy="22" rx="2.1" ry="2.6" fill="#241a04"/>
+            </g>
+          </svg>
+          <div>
+            <div class="welcome">Welcome back, <span class="name">dorsa</span>!</div>
+            <div class="subline">Sonnet 5 · Claude Max · ~/Desktop</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="term-feed" id="termFeed"></div>
+      <div class="cursor-layer" id="cursorLayer">
+        <div class="cursor dorsa" id="cursor-dorsa"><svg viewBox="0 0 24 24"><path d="M4 2 L4 20 L9 15.5 L12.2 22 L15.3 20.6 L12.1 14 L18.2 14 Z" fill="currentColor"/></svg><span class="cursor-label">dorsa</span></div>
+        <div class="cursor nick" id="cursor-nick"><svg viewBox="0 0 24 24"><path d="M4 2 L4 20 L9 15.5 L12.2 22 L15.3 20.6 L12.1 14 L18.2 14 Z" fill="currentColor"/></svg><span class="cursor-label">Nick Williams</span></div>
+        <div class="cursor shubham" id="cursor-shubham"><svg viewBox="0 0 24 24"><path d="M4 2 L4 20 L9 15.5 L12.2 22 L15.3 20.6 L12.1 14 L18.2 14 Z" fill="currentColor"/></svg><span class="cursor-label">Shubham Patil</span></div>
+      </div>
+    </div>
+
+    <div class="chat-bar">
+      <span class="chat-prompt">›</span>
+      <input id="chatInput" type="text" placeholder="Message the shared session — everyone here sees this" maxlength="140">
+      <span class="chat-hint">↵ send</span>
+    </div>
+
+    <div class="statusbar">
+      <div class="status-left">manual mode on · <kbd>?</kbd> for shortcuts · <kbd>←</kbd> for agents</div>
+      <div class="status-right">
+        <span class="in-session">● 3 in session</span>
+        <span class="local-badge"><span class="pulse-dot"></span>local · p2p · no data out</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="caption">Interactive prototype simulating the vibelive experience — multiplayer for agentic coding terminals. Nothing here leaves this browser tab.</div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var USERS = {
+    dorsa:   { name:"dorsa",           initials:"D", hex:"#f5a524", rgb:"245,165,36", host:true },
+    nick:    { name:"Nick Williams",   initials:"N", hex:"#e5484d", rgb:"229,72,77" },
+    shubham: { name:"Shubham Patil",   initials:"S", hex:"#3b82f6", rgb:"59,130,246" }
+  };
+
+  // ---- presence avatars ----
+  var presence = document.getElementById("presence");
+  Object.keys(USERS).forEach(function(key){
+    var u = USERS[key];
+    var el = document.createElement("div");
+    el.className = "avatar" + (u.host ? " host" : "");
+    el.style.background = u.hex;
+    el.style.color = u.host ? "#241a04" : "#fff";
+    el.textContent = u.initials;
+    el.title = u.name + (u.host ? " · host" : "");
+    presence.appendChild(el);
+  });
+
+  // ---- share button ----
+  var shareBtn = document.getElementById("shareBtn");
+  shareBtn.addEventListener("click", function(){
+    try { navigator.clipboard && navigator.clipboard.writeText("https://vibe.live/s/9fx2"); } catch(e){}
+    shareBtn.classList.add("copied");
+    var original = shareBtn.innerHTML;
+    shareBtn.innerHTML = "✓ link copied <span class=\"share-sub\">spectate or invite</span>";
+    setTimeout(function(){ shareBtn.innerHTML = original; shareBtn.classList.remove("copied"); }, 1600);
+  });
+
+  // ============== terminal feed ==============
+  var feed = document.getElementById("termFeed");
+  var MAX_LINES = 13;
+
+  function addLine(html, cls){
+    var d = document.createElement("div");
+    d.className = "line" + (cls ? " " + cls : "");
+    d.innerHTML = html;
+    feed.appendChild(d);
+    while (feed.children.length > MAX_LINES) feed.removeChild(feed.firstChild);
+    return d;
+  }
+
+  function typeInto(el, text, speed){
+    return new Promise(function(resolve){
+      var i = 0;
+      var t = setInterval(function(){
+        el.textContent = text.slice(0, i++);
+        while (feed.children.length > MAX_LINES) feed.removeChild(feed.firstChild);
+        if (i > text.length){ clearInterval(t); resolve(); }
+      }, speed || 16);
+    });
+  }
+
+  function wait(ms){ return new Promise(function(r){ setTimeout(r, ms); }); }
+
+  var SCRIPT = [
+    { t:"agent", text:"Let's clean up the discount logic in pricing.ts." },
+    { t:"tool",  name:"Read", arg:"src/pricing.ts" },
+    { t:"tool",  name:"Edit", arg:"src/pricing.ts" },
+    { t:"diff",  del:"- return price * 1.0;", add:"+ return price * (1 - discount);" },
+    { t:"chat",  user:"nick", text:"wait, revert that last edit" },
+    { t:"agent", text:"Got it — reverting the discount change, keeping the flat rate for now." },
+    { t:"tool",  name:"Bash", arg:"git checkout -- src/pricing.ts" },
+    { t:"ok",    text:"reverted" },
+    { t:"chatagent", user:"shubham", text:"run the tests" },
+    { t:"tool",  name:"Bash", arg:"npm test" },
+    { t:"spin",  text:"running 42 tests", resolved:"42 passed", ms:1250 },
+    { t:"agent", text:"All green. Opening a PR with the pricing fix." },
+    { t:"tool",  name:"Bash", arg:"gh pr create" },
+    { t:"ok",    text:"PR #42 opened" },
+    { t:"chat",  user:"dorsa", text:"nice, merging after CI" },
+    { t:"agent", text:"On it — I'll watch CI and ping this thread the moment it's green." }
+  ];
+
+  var busy = false;
+
+  async function runScript(){
+    var idx = 0;
+    while (true){
+      var ev = SCRIPT[idx % SCRIPT.length];
+      idx++;
+      busy = true;
+      if (ev.t === "agent"){
+        var el = addLine("", "agent");
+        await typeInto(el, ev.text, 14);
+        await wait(500);
+      } else if (ev.t === "tool"){
+        addLine('<span class="bullet">⏺</span><span class="tool-name">' + ev.name + '</span> <span class="tool-arg">' + ev.arg + '</span>', "tool");
+        await wait(480);
+      } else if (ev.t === "diff"){
+        var wrap = document.createElement("div");
+        wrap.className = "diff";
+        wrap.innerHTML = '<div class="del">' + ev.del + '</div><div class="add">' + ev.add + '</div>';
+        feed.appendChild(wrap);
+        while (feed.children.length > MAX_LINES) feed.removeChild(feed.firstChild);
+        await wait(700);
+      } else if (ev.t === "ok"){
+        addLine('✓ ' + ev.text, "success");
+        await wait(550);
+      } else if (ev.t === "spin"){
+        var sEl = addLine('<span class="spinner">⠋</span>' + ev.text + '…', "spin");
+        var frames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
+        var fi = 0;
+        var spinTimer = setInterval(function(){
+          var s = sEl.querySelector(".spinner");
+          if (s) s.textContent = frames[fi++ % frames.length];
+        }, 80);
+        await wait(ev.ms);
+        clearInterval(spinTimer);
+        sEl.className = "line success";
+        sEl.innerHTML = '✓ ' + ev.resolved;
+        await wait(500);
+      } else if (ev.t === "chat"){
+        var u = USERS[ev.user];
+        addLine('[<b>' + u.name.split(" ")[0] + '</b>] ' + ev.text, "chat-" + ev.user);
+        await wait(650);
+      } else if (ev.t === "chatagent"){
+        var u2 = USERS[ev.user];
+        addLine('[<b>' + u2.name.split(" ")[0] + ' → agent</b>] ' + ev.text, "chat-" + ev.user);
+        await wait(650);
+      }
+      busy = false;
+    }
+  }
+  runScript();
+
+  // ============== chat input (real, injects into feed) ==============
+  var input = document.getElementById("chatInput");
+  var replies = [
+    "Sure — I'll take a look.",
+    "On it.",
+    "Got it, one sec.",
+    "Sounds good — updating now."
+  ];
+  input.addEventListener("keydown", function(e){
+    if (e.key !== "Enter") return;
+    var val = input.value.trim();
+    if (!val) return;
+    addLine('[<b>you</b>] ' + val.replace(/</g,"&lt;"), "chat-you");
+    input.value = "";
+    setTimeout(function(){
+      var el = addLine("", "agent");
+      typeInto(el, replies[Math.floor(Math.random()*replies.length)], 14);
+    }, 900 + Math.random()*500);
+  });
+
+  // ============== multiplayer cursors ==============
+  var termBody = document.getElementById("termBody");
+  var cursorLayer = document.getElementById("cursorLayer");
+
+  function rand(a,b){ return a + Math.random()*(b-a); }
+
+  function driveCursor(key){
+    var el = document.getElementById("cursor-" + key);
+    var u = USERS[key];
+
+    function step(){
+      var bodyRect = termBody.getBoundingClientRect();
+      var lines = feed.querySelectorAll(".line, .diff");
+      var x, y, targetLine = null;
+
+      if (lines.length && Math.random() < 0.7){
+        targetLine = lines[Math.floor(Math.random() * lines.length)];
+        var r = targetLine.getBoundingClientRect();
+        x = (r.left - bodyRect.left) + rand(14, Math.max(20, r.width * 0.55));
+        y = (r.top - bodyRect.top) + r.height / 2 - 8;
+      } else {
+        x = rand(24, Math.max(60, bodyRect.width - 60));
+        y = rand(30, Math.max(60, bodyRect.height - 40));
+      }
+
+      var dur = rand(0.9, 1.7);
+      el.style.transitionDuration = dur.toFixed(2) + "s";
+      el.style.transform = "translate3d(" + x.toFixed(1) + "px," + y.toFixed(1) + "px,0)";
+
+      setTimeout(function(){
+        if (targetLine && Math.random() < 0.5){
+          var prevBg = targetLine.style.backgroundColor;
+          targetLine.style.backgroundColor = "rgba(" + u.rgb + ",.12)";
+          setTimeout(function(){ targetLine.style.backgroundColor = prevBg || ""; }, 850);
+
+          if (Math.random() < 0.45){
+            var lr = targetLine.getBoundingClientRect();
+            var bar = document.createElement("div");
+            bar.className = "selection-bar";
+            var w = lr.width * rand(0.25, 0.6);
+            var left = (lr.left - bodyRect.left) + rand(6, Math.max(8, lr.width - w - 6));
+            bar.style.left = left + "px";
+            bar.style.top = (lr.top - bodyRect.top + 1) + "px";
+            bar.style.width = w + "px";
+            bar.style.height = (lr.height - 2) + "px";
+            bar.style.background = "rgba(" + u.rgb + ",.20)";
+            cursorLayer.appendChild(bar);
+            setTimeout(function(){ bar.style.opacity = "0"; }, 700);
+            setTimeout(function(){ bar.remove(); }, 1250);
+          }
+        }
+        setTimeout(step, rand(350, 1000));
+      }, dur * 1000);
+    }
+    setTimeout(step, rand(150, 900));
+  }
+
+  Object.keys(USERS).forEach(driveCursor);
+
+})();
+</script>
