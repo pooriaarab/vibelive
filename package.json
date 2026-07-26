@@ -1,5 +1,5 @@
 {
-  "name": "@pooriaarab/vibelive",
+  "name": "vibelive-cli",
   "version": "0.1.0",
   "description": "Multiplayer for agentic coding terminals — shared Claude Code/Codex/Gemini sessions with live cursors, presence, and in-terminal chat. Local-first, e2e, self-hostable relay.",
   "type": "module",
