@@ -294,6 +294,6 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 
 // Run only when executed directly (not when imported by tests). The shebang
 // above makes the bundled `dist/cli.js` directly invokable.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1]) {
   void main().then((code) => process.exit(code));
 }
