@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs';
 /**
  * vibelive CLI — tiny, dependency-light arg parsing + the three subcommands.
  *
@@ -294,6 +295,6 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 
 // Run only when executed directly (not when imported by tests). The shebang
 // above makes the bundled `dist/cli.js` directly invokable.
-if (process.argv[1]) {
+if (process.argv[1] && import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href) {
   void main().then((code) => process.exit(code));
 }
