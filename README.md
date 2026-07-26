@@ -9,9 +9,9 @@ Part of the **Vibe Suite** — companion tools for agentic coding CLIs (Claude C
 ## Install
 
 ```bash
-npm install -g @pooriaarab/vibelive
+npm install -g vibelive-cli
 # or use it as a library / MCP server without the global install:
-npm install @pooriaarab/vibelive
+npm install vibelive-cli
 ```
 
 Requires Node ≥ 18.
@@ -82,11 +82,11 @@ Example (Claude Code / any MCP client config):
 ## Library
 
 ```bash
-npm install @pooriaarab/vibelive
+npm install vibelive-cli
 ```
 
 ```ts
-import { createHost, createRelay, joinSession, WriteArbiter } from '@pooriaarab/vibelive';
+import { createHost, createRelay, joinSession, WriteArbiter } from 'vibelive-cli';
 
 // Host-authoritative session on an ephemeral port.
 const host = createHost({ command: ['claude'] });
