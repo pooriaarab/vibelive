@@ -6,6 +6,9 @@
  *                       (or until the wrapped agent exits).
  *   - session_status  — list active sessions (id, url, participants, driver).
  *
+ * When the MCP client disconnects (stdin closes), every hosted agent is killed
+ * and every relay closed — sessions never outlive the MCP server as orphans.
+ *
  * Uses the high-level McpServer API from @modelcontextprotocol/sdk. Input
  * schemas are Zod raw shapes (the SDK's expected form); zod is a transitive
  * dependency of the SDK and gets bundled into dist/mcp.js.
@@ -13,19 +16,27 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { createHost } from './host.js';
+import { createHost, type HostHandle } from './host.js';
 import { createRelay, type RelayHandle } from './relay.js';
 import { VERSION } from './version.js';
 
 interface ManagedSession {
   readonly id: string;
+  readonly host: HostHandle;
   readonly relay: RelayHandle;
   readonly command: readonly string[];
   readonly name: string;
 }
 
+/** The MCP server plus the lifecycle hook for everything it started. */
+export interface McpServerBundle {
+  readonly server: McpServer;
+  /** Kill every hosted agent and close every relay started via host_session. */
+  closeAllSessions(): Promise<void>;
+}
+
 /** Build the vibelive MCP server (tools registered, not yet connected). */
-export function createMcpServer(): McpServer {
+export function createMcpServer(): McpServerBundle {
   const server = new McpServer(
     { name: 'vibelive', version: VERSION },
     {
@@ -65,7 +76,7 @@ export function createMcpServer(): McpServer {
         hostParticipantName: name ?? 'host',
       });
       const id = `session-${relay.port}`;
-      sessions.set(id, { id, relay, command, name: name ?? 'host' });
+      sessions.set(id, { id, host, relay, command, name: name ?? 'host' });
       // When the wrapped agent exits, tear the session down.
       void host.exited.then(async () => {
         sessions.delete(id);
@@ -115,12 +126,21 @@ export function createMcpServer(): McpServer {
     },
   );
 
-  return server;
+  const closeAllSessions = async (): Promise<void> => {
+    const all = [...sessions.values()];
+    sessions.clear();
+    for (const s of all) {
+      s.host.kill();
+      await s.relay.close();
+    }
+  };
+
+  return { server, closeAllSessions };
 }
 
 /** Create the server, wire it to stdio, and run until the client disconnects. */
 export async function runMcpStdio(): Promise<void> {
-  const server = createMcpServer();
+  const { server, closeAllSessions } = createMcpServer();
   const transport = new StdioServerTransport();
   await server.connect(transport);
   // Stay alive until the MCP client closes stdin.
@@ -128,4 +148,7 @@ export async function runMcpStdio(): Promise<void> {
     process.stdin.once('end', resolve);
     process.stdin.once('close', resolve);
   });
+  // Don't orphan wrapped agents when the MCP host (Claude Code etc.) goes away.
+  await closeAllSessions();
+  await server.close();
 }

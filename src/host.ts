@@ -23,6 +23,8 @@ export interface HostOptions {
 }
 
 export interface HostHandle {
+  /** The wrapped command, argv-style (as passed to {@link createHost}). */
+  readonly command: readonly string[];
   /** The retained output log (source of truth for snapshot+tail). */
   readonly log: OutputLog;
   /** Latest output seq (0 before any output). */
@@ -71,9 +73,11 @@ export function createHost(options: HostOptions): HostHandle {
   child.stdout?.on('data', emit);
   child.stderr?.on('data', emit);
 
-  // Surface spawn failures (ENOENT etc.) as a synthetic exit so callers' exited
-  // promise always settles.
+  // Surface spawn failures (ENOENT etc.) in the output log so the host user and
+  // every participant sees why the session ended, not a silent exit.
+  let spawnFailed = false;
   child.once('error', (err) => {
+    spawnFailed = true;
     emit(`[vibelive] failed to start ${bin}: ${err.message}\n`);
   });
 
@@ -81,11 +85,25 @@ export function createHost(options: HostOptions): HostHandle {
   const exited = new Promise<number | null>((resolve) => {
     exitResolve = resolve;
   });
+  // 'exit' does NOT fire when the spawn itself failed (no process ever existed),
+  // only 'close' does — so settle on the first of the two, never both. A failed
+  // spawn resolves 127 (shell convention for "command not found") so `vibelive
+  // host -- <bogus>` errors out instead of hanging forever.
+  let settled = false;
+  const settle = (code: number | null): void => {
+    if (settled) return;
+    settled = true;
+    exitResolve(code);
+  };
   child.once('exit', (code, signal) => {
-    exitResolve(signal ? null : code);
+    settle(signal ? null : code);
+  });
+  child.once('close', (code) => {
+    settle(spawnFailed ? 127 : code);
   });
 
   const handle: HostHandle = {
+    command,
     log,
     get seq() {
       return log.seq;
