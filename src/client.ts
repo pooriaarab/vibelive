@@ -19,7 +19,7 @@ export interface SessionClientOptions {
   readonly url: string;
   /** Display name for this participant. */
   readonly name: string;
-  /** Open timeout in ms (default 10s). */
+  /** Handshake timeout in ms — fail if no snapshot arrives in time (default 10s). */
   readonly timeoutMs?: number;
 }
 
@@ -45,7 +45,10 @@ export interface CursorUpdate {
 export interface SessionClient {
   readonly url: string;
   readonly name: string;
-  /** Resolves to this client's server-assigned id (once the snapshot lands). */
+  /**
+   * Resolves to this client's server-assigned id (once the snapshot lands).
+   * Rejects if the connection closes or the handshake times out first.
+   */
   readonly id: Promise<string>;
   onSnapshot(cb: (seq: number) => void): () => void;
   onOutput(cb: (text: string, seq: number) => void): () => void;
@@ -86,15 +89,30 @@ export function joinSession(options: SessionClientOptions): SessionClient {
   const closeCbs = new Set<Cb<void>>();
 
   let idResolve!: (id: string) => void;
-  const idPromise = new Promise<string>((resolve) => {
+  let idReject!: (err: Error) => void;
+  const idPromise = new Promise<string>((resolve, reject) => {
     idResolve = resolve;
+    idReject = reject;
   });
+  // Consumers that never await `id` must not trip Node's unhandled-rejection
+  // warnings when a connection fails; awaiting consumers still see the rejection.
+  idPromise.catch(() => {});
   let idResolved = false;
 
   let closedResolve!: () => void;
   const closedPromise = new Promise<void>((resolve) => {
     closedResolve = resolve;
   });
+
+  // Handshake timeout: the session is usable once the relay's snapshot assigns
+  // our id. If that hasn't happened within timeoutMs, fail loudly and hang up.
+  const timeoutMs = options.timeoutMs ?? 10_000;
+  const handshakeTimer = setTimeout(() => {
+    if (idResolved) return;
+    errorCbs.forEach((cb) => cb(`timed out connecting to ${options.url} after ${timeoutMs}ms`));
+    idReject(new Error(`vibelive: handshake timed out after ${timeoutMs}ms`));
+    ws.terminate();
+  }, timeoutMs);
 
   const send = (msg: ClientMessage): void => {
     if (ws.readyState === WebSocket.OPEN) {
@@ -117,6 +135,7 @@ export function joinSession(options: SessionClientOptions): SessionClient {
       case 'snapshot': {
         if (!idResolved) {
           idResolved = true;
+          clearTimeout(handshakeTimer);
           idResolve(msg.you);
         }
         for (const e of msg.entries) outputCbs.forEach((cb) => cb({ text: e.text, seq: e.seq }));
@@ -151,6 +170,11 @@ export function joinSession(options: SessionClientOptions): SessionClient {
   });
 
   ws.on('close', () => {
+    clearTimeout(handshakeTimer);
+    if (!idResolved) {
+      idResolved = true;
+      idReject(new Error(`vibelive: connection to ${options.url} closed before the session snapshot arrived`));
+    }
     closeCbs.forEach((cb) => cb());
     closedResolve();
   });

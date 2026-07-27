@@ -8,10 +8,13 @@
  *   - relays presence/cursor deltas lossily (channel 2),
  *   - relays chat reliably and mediates agent-write through the WriteArbiter
  *     so there is never more than one driver (channel 3 + §4 arbitration),
- *   - tracks the participant roster, and
+ *   - tracks the participant roster,
  *   - gates all session egress through the @pooriaarab/vibe-core consent ledger
  *     (scope `share:session`) — starting a host session is the explicit grant,
- *     and it is revocable.
+ *     and it is revocable, and
+ *   - emits normalized lifecycle milestones (e.g. `session-end`) on the
+ *     vibe-core hook bus, so other suite tools can react without vibelive
+ *     binding to any one agent's hook format.
  *
  * Full 1000-participant e2e-encrypted relay fan-out is a post-v0 concern; this
  * small tier is built to be correct and genuinely usable on a LAN.
@@ -20,8 +23,9 @@ import { once } from 'node:events';
 import { WebSocketServer, type WebSocket } from 'ws';
 import {
   createConsentLedger,
+  createHookBus,
   type ConsentLedger,
-  type VibeEvent,
+  type HookBus,
 } from '@pooriaarab/vibe-core';
 import { WriteArbiter } from './arbitration.js';
 import { OutputLog, type OutputEntry } from './output-log.js';
@@ -56,12 +60,12 @@ export interface RelayOptions {
   readonly hostHandle?: HostHandle;
   /** Consent ledger (defaults to an in-memory one with share:session granted). */
   readonly consent?: ConsentLedger;
+  /** Hook bus the relay emits session lifecycle events on (defaults to in-memory). */
+  readonly hooks?: HookBus;
   /** Seed the arbiter with an initial driver (e.g. the local host user 'host'). */
   readonly initialDriver?: string | null;
   /** Display name for a local host-user participant added to the roster. */
   readonly hostParticipantName?: string;
-  /** Optional sink for normalized VibeEvents (e.g. session-end on host exit). */
-  readonly onVibeEvent?: (e: VibeEvent) => void;
   /** Retained output-log capacity (per relay mirror). Default 5000. */
   readonly logCap?: number;
 }
@@ -72,6 +76,8 @@ export interface RelayHandle {
   /** ws:// URL printed for `vibelive join`. */
   readonly url: string;
   readonly consent: ConsentLedger;
+  /** The hook bus session lifecycle events (e.g. session-end) are emitted on. */
+  readonly hooks: HookBus;
   readonly arbiter: WriteArbiter;
   /** Current roster (local + remote participants). */
   readonly participants: readonly Participant[];
@@ -99,6 +105,7 @@ export async function createRelay(options: RelayOptions = {}): Promise<RelayHand
     // Starting a host session is the explicit act of consenting to share it.
     consent.grant(SHARE_SESSION_SCOPE, 'vibelive host session');
   }
+  const hooks = options.hooks ?? createHookBus();
 
   const arbiter = new WriteArbiter(options.initialDriver ?? null);
   const log = new OutputLog(options.logCap);
@@ -181,9 +188,10 @@ export async function createRelay(options: RelayOptions = {}): Promise<RelayHand
     const host = options.hostHandle;
     unsubscribeHost = host.onOutput((entry) => emitOutput(entry));
     host.exited.then((code) => {
-      options.onVibeEvent?.({
+      // Normalized session-end milestone on the suite hook bus (core spec §3).
+      hooks.emit({
         kind: 'session-end',
-        agent: 'pi',
+        agent: host.command[0] ?? 'vibelive',
         cwd: process.cwd(),
         payload: { code },
         ts: Date.now(),
@@ -307,7 +315,9 @@ export async function createRelay(options: RelayOptions = {}): Promise<RelayHand
     closed = true;
     unsubscribeHost?.();
     for (const p of participants.values()) {
-      if (p.ws && p.ws.readyState === 1) p.ws.close(1001, 'relay shutting down');
+      // terminate (not close) — don't block shutdown on a close handshake that a
+      // stuck or half-dead client may never answer.
+      if (p.ws && p.ws.readyState === 1) p.ws.terminate();
     }
     await new Promise<void>((resolve) => wss.close(() => resolve()));
     closedResolve();
@@ -321,6 +331,7 @@ export async function createRelay(options: RelayOptions = {}): Promise<RelayHand
       return `ws://${urlHost}:${actualPort}`;
     },
     consent,
+    hooks,
     arbiter,
     get participants() {
       return [...participants.values()];
