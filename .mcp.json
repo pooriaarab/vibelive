@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "vibelive": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "vibelive",
+        "mcp"
+      ]
+    }
+  }
+}
