@@ -5,4 +5,4 @@
  * build time so the strict tsconfig (no `resolveJsonModule`) can stay untouched
  * and the bundled output stays dependency-light.
  */
-export const VERSION = '0.2.0';
+export const VERSION = '0.2.2';

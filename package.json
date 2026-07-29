@@ -1,7 +1,7 @@
 {
   "name": "vibelive",
-  "version": "0.2.1",
-  "description": "Multiplayer for agentic coding terminals — shared Claude Code/Codex/Gemini sessions with live cursors, presence, and in-terminal chat. Local-first, e2e, self-hostable relay.",
+  "version": "0.2.2",
+  "description": "Multiplayer for agentic coding terminals \u2014 shared Claude Code/Codex/Gemini sessions with live cursors, presence, and in-terminal chat. Local-first, e2e, self-hostable relay.",
   "type": "module",
   "license": "MIT",
   "author": "Pooria Arab",
@@ -61,5 +61,6 @@
   },
   "engines": {
     "node": ">=18"
-  }
+  },
+  "mcpName": "io.github.pooriaarab/vibelive"
 }
