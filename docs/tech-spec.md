@@ -88,7 +88,7 @@ explicitly:
   (headless, scripted cursor motion + chat + join/leave churn) against a real
   host+relay. Run at **N = 10, 100, 1,000.** Assert the §5 budgets: measure
   latency p50/p99, dropped-frame %, host CPU/bandwidth, relay fan-out cost. Fail
-  CI if budgets regress (perf gates, like solo-admin's CI perf approach).
+  CI if budgets regress (perf gates, like a production monorepo's CI perf approach).
 - **Chaos:** inject packet drop/reorder/latency + mid-session relay restart +
   host reconnect; assert session heals (late-joiner snapshot works, no
   desync/duplicate output).

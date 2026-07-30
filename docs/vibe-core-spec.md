@@ -91,7 +91,7 @@ existing client to the provider adapter in-process.
 ### 2.2 Provider adapters
 One adapter per provider (`anthropic`, `openai`, `google`, `xai`, `local`), each
 declaring which capabilities it supports and a uniform `generate()` per capability.
-Adding a provider = one file. (Same recipe pattern as solo-admin's provider
+Adding a provider = one file. (Same recipe pattern as a production provider-registry
 registry — see project memory.)
 
 ### 2.3 Local runners (tier 3)
