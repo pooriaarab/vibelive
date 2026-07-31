@@ -1,6 +1,6 @@
 {
   "name": "vibelive",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Multiplayer for agentic coding terminals — shared Claude Code/Codex/Gemini sessions with live cursors, presence, and in-terminal chat. Local-first, e2e, self-hostable relay.",
   "type": "module",
   "license": "MIT",
