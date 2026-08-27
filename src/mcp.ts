@@ -35,19 +35,7 @@ export interface McpServerBundle {
   closeAllSessions(): Promise<void>;
 }
 
-/** Build the vibelive MCP server (tools registered, not yet connected). */
-export function createMcpServer(): McpServerBundle {
-  const server = new McpServer(
-    { name: 'vibelive', version: VERSION },
-    {
-      capabilities: { tools: {} },
-      instructions:
-        'vibelive gives an agent multiplayer terminals. Use host_session to share a wrapped agent command and get a join URL; use session_status to inspect active sessions.',
-    },
-  );
-
-  const sessions = new Map<string, ManagedSession>();
-
+function registerHostSessionTool(server: McpServer, sessions: Map<string, ManagedSession>): void {
   server.registerTool(
     'host_session',
     {
@@ -92,7 +80,9 @@ export function createMcpServer(): McpServerBundle {
       };
     },
   );
+}
 
+function registerSessionStatusTool(server: McpServer, sessions: Map<string, ManagedSession>): void {
   server.registerTool(
     'session_status',
     {
@@ -125,17 +115,33 @@ export function createMcpServer(): McpServerBundle {
       return { content: [{ type: 'text' as const, text }] };
     },
   );
+}
 
-  const closeAllSessions = async (): Promise<void> => {
-    const all = [...sessions.values()];
-    sessions.clear();
-    for (const s of all) {
-      s.host.kill();
-      await s.relay.close();
-    }
-  };
+async function closeAllManagedSessions(sessions: Map<string, ManagedSession>): Promise<void> {
+  const all = [...sessions.values()];
+  sessions.clear();
+  for (const s of all) {
+    s.host.kill();
+    await s.relay.close();
+  }
+}
 
-  return { server, closeAllSessions };
+/** Build the vibelive MCP server (tools registered, not yet connected). */
+export function createMcpServer(): McpServerBundle {
+  const server = new McpServer(
+    { name: 'vibelive', version: VERSION },
+    {
+      capabilities: { tools: {} },
+      instructions:
+        'vibelive gives an agent multiplayer terminals. Use host_session to share a wrapped agent command and get a join URL; use session_status to inspect active sessions.',
+    },
+  );
+
+  const sessions = new Map<string, ManagedSession>();
+  registerHostSessionTool(server, sessions);
+  registerSessionStatusTool(server, sessions);
+
+  return { server, closeAllSessions: () => closeAllManagedSessions(sessions) };
 }
 
 /** Create the server, wire it to stdio, and run until the client disconnects. */

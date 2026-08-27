@@ -32,6 +32,7 @@ import { OutputLog, type OutputEntry } from './output-log.js';
 import {
   decodeClient,
   encode,
+  type ClientMessage,
   type ParticipantWire,
   type ServerMessage,
 } from './protocol.js';
@@ -95,26 +96,35 @@ export interface RelayHandle {
   readonly closed: Promise<void>;
 }
 
-export async function createRelay(options: RelayOptions = {}): Promise<RelayHandle> {
-  const bindHost = options.host ?? '0.0.0.0';
-  const urlHost = options.urlHost ?? 'localhost';
-  const port = options.port ?? 0;
+interface RelayRuntime {
+  consent: ConsentLedger;
+  hooks: HookBus;
+  arbiter: WriteArbiter;
+  log: OutputLog;
+  participants: Map<string, Participant>;
+  hostHandle: HostHandle | undefined;
+  freshId: () => string;
+  unsubscribeHost?: () => void;
+}
 
-  const consent = options.consent ?? createConsentLedger();
+interface ConnState {
+  id: string;
+  named: boolean;
+  participant: Participant;
+  ws: WebSocket;
+}
+
+function ensureShareConsent(existing: ConsentLedger | undefined): ConsentLedger {
+  const consent = existing ?? createConsentLedger();
   if (!consent.allows(SHARE_SESSION_SCOPE)) {
     // Starting a host session is the explicit act of consenting to share it.
     consent.grant(SHARE_SESSION_SCOPE, 'vibelive host session');
   }
-  const hooks = options.hooks ?? createHookBus();
+  return consent;
+}
 
-  const arbiter = new WriteArbiter(options.initialDriver ?? null);
-  const log = new OutputLog(options.logCap);
-
-  // id = local host-user participant (no socket), plus remote ws participants.
+function seedParticipants(options: RelayOptions): Map<string, Participant> {
   const participants = new Map<string, Participant>();
-  let nextId = 1;
-  const freshId = (): string => `p${nextId++}`;
-
   // If a local host-user is the initial driver, register them in the roster so
   // remote clients see them in presence and as the current driver.
   if (options.initialDriver) {
@@ -124,25 +134,33 @@ export async function createRelay(options: RelayOptions = {}): Promise<RelayHand
       named: true,
     });
   }
+  return participants;
+}
 
+async function listenRelay(options: RelayOptions): Promise<{ wss: WebSocketServer; actualPort: number }> {
+  const bindHost = options.host ?? '0.0.0.0';
+  const port = options.port ?? 0;
   const wss = new WebSocketServer({ port, host: bindHost });
   await once(wss, 'listening');
   const address = wss.address();
   const actualPort = typeof address === 'object' && address ? address.port : port;
+  return { wss, actualPort };
+}
 
+function sendTo(ws: WebSocket | undefined, msg: ServerMessage): void {
+  if (ws && ws.readyState === /* OPEN */ 1) {
+    ws.send(encode(msg));
+  }
+}
+
+function makeRelayIO(rt: RelayRuntime) {
   const rosterWire = (): ParticipantWire[] =>
-    [...participants.values()].map((p) => ({ id: p.id, name: p.name }));
-
-  const sendTo = (ws: WebSocket | undefined, msg: ServerMessage): void => {
-    if (ws && ws.readyState === /* OPEN */ 1) {
-      ws.send(encode(msg));
-    }
-  };
+    [...rt.participants.values()].map((p) => ({ id: p.id, name: p.name }));
 
   const broadcast = (msg: ServerMessage): void => {
-    if (!consent.allows(SHARE_SESSION_SCOPE)) return; // egress gate
+    if (!rt.consent.allows(SHARE_SESSION_SCOPE)) return; // egress gate
     const data = encode(msg);
-    for (const p of participants.values()) {
+    for (const p of rt.participants.values()) {
       // Only fan out to participants past the hello handshake, so a client never
       // receives live output/chat before its initial snapshot.
       if (p.named && p.ws && p.ws.readyState === 1) p.ws.send(data);
@@ -153,158 +171,153 @@ export async function createRelay(options: RelayOptions = {}): Promise<RelayHand
     broadcast({
       kind: 'presence',
       participants: rosterWire(),
-      driverId: arbiter.driver(),
+      driverId: rt.arbiter.driver(),
     });
   };
 
   const sendControlState = (): void => {
-    const snap = arbiter.snapshot();
+    const snap = rt.arbiter.snapshot();
     broadcast({ kind: 'control', action: 'state', driverId: snap.driverId, queue: snap.queue });
   };
 
   /** Run an arbiter mutation then notify everyone of the resulting control state. */
   const applyControl = (mutate: (a: WriteArbiter) => void): void => {
-    mutate(arbiter);
+    mutate(rt.arbiter);
     sendControlState();
     sendPresence(); // driverId also rides on presence
   };
 
-  // ---- output fan-in ----
   const emitOutput = (entry: OutputEntry): void => {
     // Mirror the host-authored entry (idempotent on retry/dup); broadcast the
     // entry's own seq/text faithfully — the host is the sole author of seqs.
-    log.ingest(entry);
+    rt.log.ingest(entry);
     broadcast({ kind: 'output', seq: entry.seq, text: entry.text });
   };
 
   const broadcastOutput = (text: string): void => {
-    const entry = log.append(text);
+    const entry = rt.log.append(text);
     broadcast({ kind: 'output', seq: entry.seq, text: entry.text });
   };
 
-  // ---- wire host if provided ----
-  let unsubscribeHost: (() => void) | undefined;
-  if (options.hostHandle) {
-    const host = options.hostHandle;
-    unsubscribeHost = host.onOutput((entry) => emitOutput(entry));
-    host.exited.then((code) => {
-      // Normalized session-end milestone on the suite hook bus (core spec §3).
-      hooks.emit({
-        kind: 'session-end',
-        agent: host.command[0] ?? 'vibelive',
-        cwd: process.cwd(),
-        payload: { code },
-        ts: Date.now(),
-      });
-    });
-  }
-
-  /** Forward driver input to the wrapped agent (consent- and driver-gated). */
   const forwardInput = (fromId: string, text: string): boolean => {
-    if (!consent.allows(SHARE_SESSION_SCOPE)) return false;
-    if (!arbiter.isDriver(fromId)) return false;
-    options.hostHandle?.sendInput(text);
+    if (!rt.consent.allows(SHARE_SESSION_SCOPE)) return false;
+    if (!rt.arbiter.isDriver(fromId)) return false;
+    rt.hostHandle?.sendInput(text);
     return true;
   };
 
-  // ---- connection lifecycle ----
-  wss.on('connection', (ws: WebSocket) => {
-    // Pre-hello: we don't yet know the name. Assign an id up front so input
-    // attribution is stable, then await the hello to set the name + catch up.
-    const id = freshId();
-    let named = false;
-    const participant: Participant = { id, name: id, named: false, ws };
-    participants.set(id, participant);
+  return { rosterWire, broadcast, sendPresence, applyControl, emitOutput, broadcastOutput, forwardInput };
+}
 
-    const handshakeError = (message: string): void => {
-      sendTo(ws, { kind: 'error', message });
-    };
+type RelayCtx = RelayRuntime & ReturnType<typeof makeRelayIO>;
 
-    ws.on('message', (raw) => {
-      let msg: ReturnType<typeof decodeClient>;
-      try {
-        msg = decodeClient(raw.toString());
-      } catch {
-        return; // ignore malformed
-      }
-
-      // First message must be hello (sets the name); afterwards it's a no-op rename.
-      if (msg.kind === 'hello') {
-        participant.name = msg.name || id;
-        participant.named = true;
-        named = true;
-        const snap = arbiter.snapshot();
-        const since = log.since(0);
-        sendTo(ws, {
-          kind: 'snapshot',
-          you: id,
-          seq: since.seq,
-          entries: since.entries,
-          participants: rosterWire(),
-          driverId: snap.driverId,
-          queue: snap.queue,
-        });
-        sendPresence();
-        return;
-      }
-
-      if (!named) {
-        handshakeError('expected hello first');
-        return;
-      }
-
-      switch (msg.kind) {
-        case 'chat':
-          broadcast({
-            kind: 'chat',
-            id,
-            name: participant.name,
-            text: msg.text,
-            ts: Date.now(),
-          });
-          break;
-        case 'cursor':
-          // Lossy/ephemeral: forward as-is. (v0 does not coalesce.)
-          broadcast({ kind: 'cursor', id, name: participant.name, x: msg.x, y: msg.y });
-          break;
-        case 'control':
-          if (msg.action === 'request') applyControl((a) => a.requestControl(id));
-          else applyControl((a) => a.release(id));
-          break;
-        case 'input': {
-          const ok = forwardInput(id, msg.text);
-          if (!ok && !arbiter.isDriver(id)) {
-            handshakeError('not the current driver — request control first');
-          }
-          break;
-        }
-        default:
-          // exhaustive guard; ignore unknown
-          break;
-      }
+function wireHostOutput(ctx: RelayCtx): void {
+  const host = ctx.hostHandle;
+  if (!host) return;
+  ctx.unsubscribeHost = host.onOutput((entry) => ctx.emitOutput(entry));
+  host.exited.then((code) => {
+    // Normalized session-end milestone on the suite hook bus (core spec §3).
+    ctx.hooks.emit({
+      kind: 'session-end',
+      agent: host.command[0] ?? 'vibelive',
+      cwd: process.cwd(),
+      payload: { code },
+      ts: Date.now(),
     });
+  });
+}
 
-    const remove = (): void => {
-      const existed = participants.delete(id);
-      if (!existed) return;
-      applyControl((a) => a.leave(id));
-      sendPresence();
-    };
+function completeHello(conn: ConnState, ctx: RelayCtx, name: string): void {
+  conn.participant.name = name || conn.id;
+  conn.participant.named = true;
+  conn.named = true;
+  const snap = ctx.arbiter.snapshot();
+  const since = ctx.log.since(0);
+  sendTo(conn.ws, {
+    kind: 'snapshot',
+    you: conn.id,
+    seq: since.seq,
+    entries: since.entries,
+    participants: ctx.rosterWire(),
+    driverId: snap.driverId,
+    queue: snap.queue,
+  });
+  ctx.sendPresence();
+}
 
-    ws.on('close', remove);
-    ws.on('error', () => remove());
+const CLIENT_HANDLERS: Record<string, (msg: ClientMessage, conn: ConnState, ctx: RelayCtx) => void> = {
+  chat: (msg, conn, ctx) => {
+    if (msg.kind !== 'chat') return;
+    ctx.broadcast({ kind: 'chat', id: conn.id, name: conn.participant.name, text: msg.text, ts: Date.now() });
+  },
+  cursor: (msg, conn, ctx) => {
+    if (msg.kind !== 'cursor') return;
+    // Lossy/ephemeral: forward as-is. (v0 does not coalesce.)
+    ctx.broadcast({ kind: 'cursor', id: conn.id, name: conn.participant.name, x: msg.x, y: msg.y });
+  },
+  control: (msg, conn, ctx) => {
+    if (msg.kind !== 'control') return;
+    if (msg.action === 'request') ctx.applyControl((a) => a.requestControl(conn.id));
+    else ctx.applyControl((a) => a.release(conn.id));
+  },
+  input: (msg, conn, ctx) => {
+    if (msg.kind !== 'input') return;
+    const ok = ctx.forwardInput(conn.id, msg.text);
+    if (!ok && !ctx.arbiter.isDriver(conn.id)) {
+      sendTo(conn.ws, { kind: 'error', message: 'not the current driver — request control first' });
+    }
+  },
+};
+
+function onClientMessage(raw: { toString(): string }, conn: ConnState, ctx: RelayCtx): void {
+  let msg: ReturnType<typeof decodeClient>;
+  try {
+    msg = decodeClient(raw.toString());
+  } catch {
+    return; // ignore malformed
+  }
+
+  // First message must be hello (sets the name); afterwards it's a no-op rename.
+  if (msg.kind === 'hello') {
+    completeHello(conn, ctx, msg.name);
+    return;
+  }
+
+  if (!conn.named) {
+    sendTo(conn.ws, { kind: 'error', message: 'expected hello first' });
+    return;
+  }
+
+  if (!Object.hasOwn(CLIENT_HANDLERS, msg.kind)) return; // exhaustive guard; ignore unknown
+  const handler = CLIENT_HANDLERS[msg.kind];
+  if (handler === undefined) return;
+  handler(msg, conn, ctx);
+}
+
+function onRelayConnection(ws: WebSocket, ctx: RelayCtx): void {
+  // Pre-hello: we don't yet know the name. Assign an id up front so input
+  // attribution is stable, then await the hello to set the name + catch up.
+  const id = ctx.freshId();
+  const participant: Participant = { id, name: id, named: false, ws };
+  ctx.participants.set(id, participant);
+  const conn: ConnState = { id, named: false, participant, ws };
+
+  ws.on('message', (raw) => {
+    onClientMessage(raw, conn, ctx);
   });
 
-  // ---- local (non-ws) participant API ----
-  const localRequestControl = (id: string): void => applyControl((a) => a.requestControl(id));
-  const localReleaseControl = (id: string): void => applyControl((a) => a.release(id));
-  const localLeave = (id: string): void => {
-    applyControl((a) => a.leave(id));
-    participants.delete(id);
-    sendPresence();
+  const remove = (): void => {
+    const existed = ctx.participants.delete(id);
+    if (!existed) return;
+    ctx.applyControl((a) => a.leave(id));
+    ctx.sendPresence();
   };
 
-  // ---- shutdown ----
+  ws.on('close', remove);
+  ws.on('error', () => remove());
+}
+
+function makeRelayHandle(ctx: RelayCtx, urlHost: string, actualPort: number, wss: WebSocketServer): RelayHandle {
   let closedResolve!: () => void;
   const closedPromise = new Promise<void>((resolve) => {
     closedResolve = resolve;
@@ -313,8 +326,8 @@ export async function createRelay(options: RelayOptions = {}): Promise<RelayHand
   const close = async (): Promise<void> => {
     if (closed) return;
     closed = true;
-    unsubscribeHost?.();
-    for (const p of participants.values()) {
+    ctx.unsubscribeHost?.();
+    for (const p of ctx.participants.values()) {
       // terminate (not close) — don't block shutdown on a close handshake that a
       // stuck or half-dead client may never answer.
       if (p.ws && p.ws.readyState === 1) p.ws.terminate();
@@ -323,28 +336,51 @@ export async function createRelay(options: RelayOptions = {}): Promise<RelayHand
     closedResolve();
   };
 
-  const handle: RelayHandle = {
+  return {
     get port() {
       return actualPort;
     },
     get url() {
       return `ws://${urlHost}:${actualPort}`;
     },
-    consent,
-    hooks,
-    arbiter,
+    consent: ctx.consent,
+    hooks: ctx.hooks,
+    arbiter: ctx.arbiter,
     get participants() {
-      return [...participants.values()];
+      return [...ctx.participants.values()];
     },
-    emitOutput,
-    broadcastOutput,
-    localRequestControl,
-    localReleaseControl,
-    localLeave,
+    emitOutput: (entry) => ctx.emitOutput(entry),
+    broadcastOutput: (text) => ctx.broadcastOutput(text),
+    localRequestControl: (id) => ctx.applyControl((a) => a.requestControl(id)),
+    localReleaseControl: (id) => ctx.applyControl((a) => a.release(id)),
+    localLeave: (id) => {
+      ctx.applyControl((a) => a.leave(id));
+      ctx.participants.delete(id);
+      ctx.sendPresence();
+    },
     close,
     get closed() {
       return closedPromise;
     },
   };
-  return handle;
+}
+
+export async function createRelay(options: RelayOptions = {}): Promise<RelayHandle> {
+  const consent = ensureShareConsent(options.consent);
+  const hooks = options.hooks ?? createHookBus();
+  const arbiter = new WriteArbiter(options.initialDriver ?? null);
+  const log = new OutputLog(options.logCap);
+  // id = local host-user participant (no socket), plus remote ws participants.
+  const participants = seedParticipants(options);
+  let nextId = 1;
+  const rt: RelayRuntime = {
+    consent, hooks, arbiter, log, participants,
+    hostHandle: options.hostHandle, freshId: () => `p${nextId++}`,
+  };
+
+  const { wss, actualPort } = await listenRelay(options);
+  const ctx: RelayCtx = { ...rt, ...makeRelayIO(rt) };
+  wireHostOutput(ctx);
+  wss.on('connection', (ws: WebSocket) => onRelayConnection(ws, ctx));
+  return makeRelayHandle(ctx, options.urlHost ?? 'localhost', actualPort, wss);
 }

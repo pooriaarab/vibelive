@@ -43,36 +43,23 @@ export interface HostHandle {
   readonly pid: number | null;
 }
 
-/**
- * Spawn the wrapped agent and maintain its output append-log. Output (stdout and
- * stderr) is captured chunk-by-chunk, each chunk becoming one seq-numbered
- * {@link OutputEntry} that every `onOutput` subscriber receives.
- */
-export function createHost(options: HostOptions): HostHandle {
-  const { command } = options;
-  const bin = command[0];
-  if (!bin) throw new Error('createHost: command must be a non-empty array');
-  const args = command.slice(1);
-
-  const log = new OutputLog(options.logCap);
-  const outputCbs = new Set<(entry: OutputEntry) => void>();
-
-  const child: ChildProcess = spawn(bin, args, {
-    cwd: options.cwd,
-    env: options.env,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-
-  const emit = (chunk: Buffer | string): void => {
+function makeOutputEmitter(
+  log: OutputLog,
+  outputCbs: Set<(entry: OutputEntry) => void>,
+): (chunk: Buffer | string) => void {
+  return (chunk: Buffer | string): void => {
     const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
     if (text.length === 0) return;
     const entry = log.append(text);
     for (const cb of outputCbs) cb(entry);
   };
+}
 
-  child.stdout?.on('data', emit);
-  child.stderr?.on('data', emit);
-
+function watchChildExit(
+  child: ChildProcess,
+  bin: string,
+  emit: (chunk: Buffer | string) => void,
+): Promise<number | null> {
   // Surface spawn failures (ENOENT etc.) in the output log so the host user and
   // every participant sees why the session ended, not a silent exit.
   let spawnFailed = false;
@@ -101,8 +88,18 @@ export function createHost(options: HostOptions): HostHandle {
   child.once('close', (code) => {
     settle(spawnFailed ? 127 : code);
   });
+  return exited;
+}
 
-  const handle: HostHandle = {
+function makeHostHandle(ctx: {
+  command: readonly string[];
+  log: OutputLog;
+  outputCbs: Set<(entry: OutputEntry) => void>;
+  child: ChildProcess;
+  exited: Promise<number | null>;
+}): HostHandle {
+  const { command, log, outputCbs, child, exited } = ctx;
+  return {
     command,
     log,
     get seq() {
@@ -130,5 +127,32 @@ export function createHost(options: HostOptions): HostHandle {
     },
     exited,
   };
-  return handle;
+}
+
+/**
+ * Spawn the wrapped agent and maintain its output append-log. Output (stdout and
+ * stderr) is captured chunk-by-chunk, each chunk becoming one seq-numbered
+ * {@link OutputEntry} that every `onOutput` subscriber receives.
+ */
+export function createHost(options: HostOptions): HostHandle {
+  const { command } = options;
+  const bin = command[0];
+  if (!bin) throw new Error('createHost: command must be a non-empty array');
+  const args = command.slice(1);
+
+  const log = new OutputLog(options.logCap);
+  const outputCbs = new Set<(entry: OutputEntry) => void>();
+
+  const child: ChildProcess = spawn(bin, args, {
+    cwd: options.cwd,
+    env: options.env,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+
+  const emit = makeOutputEmitter(log, outputCbs);
+  child.stdout?.on('data', emit);
+  child.stderr?.on('data', emit);
+
+  const exited = watchChildExit(child, bin, emit);
+  return makeHostHandle({ command, log, outputCbs, child, exited });
 }
