@@ -379,7 +379,9 @@ export async function createRelay(options: RelayOptions = {}): Promise<RelayHand
   };
 
   const { wss, actualPort } = await listenRelay(options);
-  const ctx: RelayCtx = { ...rt, ...makeRelayIO(rt) };
+  // Assign onto rt rather than spreading it: ctx and rt must stay the SAME object,
+  // or a field reassigned through one (unsubscribeHost) would go stale in the other.
+  const ctx: RelayCtx = Object.assign(rt, makeRelayIO(rt));
   wireHostOutput(ctx);
   wss.on('connection', (ws: WebSocket) => onRelayConnection(ws, ctx));
   return makeRelayHandle(ctx, options.urlHost ?? 'localhost', actualPort, wss);
