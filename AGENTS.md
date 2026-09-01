@@ -2,8 +2,8 @@
 
 ## Repository context
 
-Read `.agents/brand.md` before changing public copy or product claims.
-Read `.agents/design.md` before changing CLI output or visual media.
+Read both `.agents/brand.md` and `.agents/design.md` before changing public copy,
+product claims, CLI output, or visual media.
 
 <!-- pr-standards:start -->
 ## Pull requests
