@@ -1,8 +1,8 @@
 {
-  "min-tokens": 100,
+  "minTokens": 100,
   "threshold": 5,
   "mode": "mild",
-  "format": ["typescript", "tsx", "javascript", "jsx"],
+  "format": ["typescript", "tsx"],
   "ignore": [
     "**/__tests__/**",
     "**/*.{test,spec}.{ts,tsx,js,jsx}",
