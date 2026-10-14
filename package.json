@@ -1,7 +1,7 @@
 {
   "name": "vibelive",
   "version": "0.2.3",
-  "description": "Multiplayer for agentic coding terminals — shared Claude Code/Codex/Gemini sessions with live cursors, presence, and in-terminal chat. Local-first, e2e, self-hostable relay.",
+  "description": "Local/LAN terminal collaboration for Claude Code and Codex commands, with WebSocket output, single-driver control, chat, and MCP tools.",
   "type": "module",
   "license": "MIT",
   "author": "Pooria Arab",
@@ -46,14 +46,17 @@
     "url": "https://github.com/pooriaarab/vibelive/issues"
   },
   "keywords": [
-    "vibe-suite",
     "vibelive",
+    "vibe-suite",
     "claude-code",
     "codex",
-    "multiplayer",
-    "cli",
+    "gemini-cli",
+    "terminal-sharing",
+    "pair-programming",
+    "websocket",
     "mcp",
-    "terminal",
+    "nodejs",
+    "driver-control",
     "local-first"
   ],
   "publishConfig": {
