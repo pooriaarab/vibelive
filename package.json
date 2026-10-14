@@ -1,6 +1,6 @@
 {
   "name": "vibelive",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Local/LAN terminal collaboration for Claude Code and Codex commands, with WebSocket output, single-driver control, chat, and MCP tools.",
   "type": "module",
   "license": "MIT",
