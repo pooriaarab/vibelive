@@ -27,7 +27,7 @@
   },
   "dependencies": {
     "@pooriaarab/vibe-core": "^0.6.0",
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.31.0",
     "ws": "^8.16.0"
   },
   "devDependencies": {
